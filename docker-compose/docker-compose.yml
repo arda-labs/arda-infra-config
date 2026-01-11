@@ -1,69 +1,70 @@
 services:
-  # --- DATABASES ---
   arda-postgres:
     image: postgres:16-alpine
     container_name: arda-postgres
-    environment:
-      POSTGRES_USER: arda_admin
-      POSTGRES_PASSWORD: arda_password
-      POSTGRES_DB: arda_central
     ports:
       - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=arda_central
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ../scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     networks:
       - arda-network
 
   arda-oracle:
     image: gvenzl/oracle-xe:21-slim
     container_name: arda-oracle
-    environment:
-      ORACLE_PASSWORD: arda_password
-      APP_USER: arda_tenant_user
-      APP_USER_PASSWORD: arda_password
     ports:
       - "1521:1521"
-    volumes:
-      - oradata:/opt/oracle/oradata
+    environment:
+      - ORACLE_PASSWORD=password
     networks:
       - arda-network
 
-  # --- IDENTITY & AUTH ---
+  arda-etcd:
+    image: bitnamilegacy/etcd:3.5.11
+    container_name: arda-etcd
+    environment:
+      - ETCD_ENABLE_V2=true
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_ADVERTISE_CLIENT_URLS=http://arda-etcd:2379
+    networks:
+      - arda-network
+
+  arda-apisix:
+    image: apache/apisix:3.14.1-debian
+    user: root
+    container_name: arda-apisix
+    ports:
+      - "9080:9080"
+      - "9180:9180"
+    volumes:
+      - ../apisix/config.yaml:/usr/local/apisix/conf/config.yaml
+    depends_on:
+      - arda-etcd
+    networks:
+      - arda-network
+
   arda-keycloak:
     image: quay.io/keycloak/keycloak:26.0
     container_name: arda-keycloak
-    command: start-dev
-    environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://arda-postgres:5432/arda_central
-      KC_DB_USERNAME: arda_admin
-      KC_DB_PASSWORD: arda_password
     ports:
-      - "8081:8080" # Đổi port ngoài sang 8081 để tránh trùng dải 80xx của BE
+      - "8081:8080"
+    environment:
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://arda-postgres:5432/arda_iam
+      - KC_DB_USERNAME=postgres
+      - KC_DB_PASSWORD=password
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    command: start-dev
     depends_on:
       - arda-postgres
     networks:
       - arda-network
 
-  # --- GATEWAY ---
-  arda-apisix:
-    image: apache/apisix:3.11.0-debian
-    container_name: arda-apisix
-    volumes:
-      - ../apisix/config.yaml:/usr/local/apisix/conf/config.yaml
-    ports:
-      - "9080:9080"
-    depends_on:
-      - arda-keycloak
-    networks:
-      - arda-network
-
 networks:
   arda-network:
-    driver: bridge
-
-volumes:
-  pgdata:
-  oradata:
+    name: arda-network
