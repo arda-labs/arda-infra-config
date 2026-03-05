@@ -74,3 +74,9 @@ plugins:
   - proxy-rewrite
   - key-auth
   - jwt-auth
+  - openid-connect
+  - serverless-pre-function
+  - serverless-post-function
+
+# Custom Lua plugin path for Internal JWT signer
+extra_lua_path: "/usr/local/apisix/conf/plugins/?.lua"

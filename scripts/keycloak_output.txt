@@ -1,0 +1,26 @@
+﻿============================================================
+  ARDA KEYCLOAK SETUP
+  URL: http://localhost:8081
+============================================================
+[1] Obtaining admin token...
+    ✓ OK
+[2] Configuring client: arda-notification-service
+    ✓ Already exists
+[2b] Configuring client: arda-gateway
+    ✓ Already exists
+[3] Configuring client: arda-shell
+    ✓ Already exists
+    Assigning realm 'admin' role to service account...
+    ✓ Realm 'admin' role assigned to service account
+[5] Creating realm role: PLATFORM_ADMIN
+    ✓ Already exists
+[6] Creating user: super_admin
+    ✓ Already exists
+[7] Assigning PLATFORM_ADMIN role to super_admin
+    ✓ Role assigned
+============================================================
+  CLIENT SECRET: 
+  Update arda-notification environment variables with this.
+============================================================
+  super_admin / 123456  →  role: PLATFORM_ADMIN (master)
+============================================================

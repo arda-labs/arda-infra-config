@@ -1,69 +1,148 @@
 # Arda Infrastructure Config
 
-This repository contains the infrastructure configuration for the **Arda** Multi-tenant SaaS system, managed via Docker Compose.
+Infrastructure configuration for the **Arda** Multi-tenant SaaS platform, managed via Docker Compose.
 
-## Structure
+## Directory Structure
 
-- `docker-compose/`: Contains the `docker-compose.yml` file.
-- `apisix/`: Configuration files for APISIX Gateway.
-- `keycloak/`: Configuration for Keycloak (if any).
-- `scripts/`: Helper scripts for initialization and setup.
+```
+arda-infra-config/
+├── docker-compose/
+│   └── docker-compose.yml       # All infrastructure services
+├── apisix/
+│   └── config.yaml              # APISIX Gateway configuration
+├── keycloak/                    # Keycloak realm configs (if any)
+└── scripts/
+    ├── init-db.sql              # PostgreSQL init: creates arda_central & arda_iam DBs
+    ├── migrate-tenants-schema.sql  # Tenant schema migrations
+    ├── create-menus-table.sql   # Menu table DDL
+    ├── seed-tenants.sql         # Sample tenant seed data
+    ├── setup-apisix-routes.sh   # APISIX route setup (Linux/Mac/Git Bash)
+    └── setup-apisix-routes.ps1  # APISIX route setup (Windows PowerShell)
+```
+
+---
+
+## Services
+
+| Service        | Port(s)    | Image                            | Description                             |
+| -------------- | ---------- | -------------------------------- | --------------------------------------- |
+| PostgreSQL     | 5432       | `postgres:16-alpine`             | Central DB (`arda_central`, `arda_iam`) |
+
+| etcd           | —          | `bitnamilegacy/etcd:3.5.11`      | APISIX config store                     |
+| APISIX Gateway | 9080       | `apache/apisix:3.14.1-debian`    | Public API Gateway                      |
+| APISIX Admin   | 9180       | ↑ same container                 | Admin API for route management          |
+| Keycloak       | 8081       | `quay.io/keycloak/keycloak:26.0` | Identity & Access Management            |
+| Kafka (KRaft)  | 9092/29092 | `apache/kafka:latest`            | Event streaming (KRaft mode, no ZK)     |
+| Kafka UI       | 8082       | `provectuslabs/kafka-ui:latest`  | Web UI for Kafka management             |
+
+### Resource Limits (RAM)
+
+| Service    | Memory Limit |
+| ---------- | ------------ |
+| PostgreSQL | 512 MB       |
+
+| etcd       | 128 MB       |
+| APISIX     | 256 MB       |
+| Keycloak   | 512 MB       |
+| Kafka      | 768 MB       |
+| Kafka UI   | 256 MB       |
+
+---
 
 ## Getting Started
 
 ### Prerequisites
 
-- Docker Desktop (or Docker Engine + Compose Plugin) installed.
+- Docker Desktop (or Docker Engine + Compose Plugin)
 
-### Running the System
+### Start All Services
 
-1. Navigate to the `docker-compose` directory:
+```bash
+cd arda-infra-config/docker-compose
+docker-compose up -d
+```
 
-   ```bash
-   cd docker-compose
-   ```
+**Stop services:**
 
-2. Start the services:
-   ```bash
-   docker-compose up -d
-   ```
+```bash
+docker-compose down
+```
+
+**Stop and remove volumes (full reset):**
+
+```bash
+docker-compose down -v
+```
+
+---
 
 ## Database Initialization
 
-The Postgres database is automatically initialized using the `scripts/init-db.sql` script.
+PostgreSQL is automatically initialized on first start using `scripts/init-db.sql`:
 
-This is achieved by mounting the script into the `arda-postgres` container at runtime. The configuration is found in `docker-compose.yml`:
+- Creates `arda_iam` database (alongside `arda_central` from `POSTGRES_DB` env var)
+- Creates the `tenants` table in `arda_central` with columns for tenant metadata, DB connection info, and UI config
+
+**Mounted via:**
 
 ```yaml
 volumes:
   - ../scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
 ```
 
-The script:
+> ⚠️ The init script only runs on **first container startup** (empty data volume). To re-run, remove the `arda-postgres-data` volume: `docker volume rm arda-postgres-data`
 
-1. Creates `arda_central` and `arda_iam` databases.
-2. Creates the `tenants` table in `arda_central`.
+### Other SQL Scripts
 
-## APISIX Setup
+| Script                       | Purpose                                       |
+| ---------------------------- | --------------------------------------------- |
+| `migrate-tenants-schema.sql` | Schema updates for the `tenants` table        |
+| `create-menus-table.sql`     | Creates the application menu/navigation table |
+| `seed-tenants.sql`           | Sample tenant data for development            |
 
-After the services are up, run the route setup script to configure the Gateway routes.
+---
 
-1. Ensure you are in the root directory (or adjust path).
-2. Run the script:
-   ```bash
-   bash scripts/setup-apisix-routes.sh
-   # Or on Windows Git Bash
-   ./scripts/setup-apisix-routes.sh
-   ```
+## APISIX Route Setup
 
-This will call the APISIX Admin API at `http://127.0.0.1:9180` to create routes for Central, IAM, CRM, BPM, and Frontend.
+After services are up, configure the Gateway routes by running the setup script:
 
-## Services
+**Linux / Mac / Git Bash:**
 
-| Service | Port | Description |
-|C---|---|---|
-| Postgres | 5432 | Central DB & IAM DB |
-| Oracle | 1521 | Tenant DBs (optional) |
-| APISIX Gateway | 9080 | Public API Gateway |
-| APISIX Admin | 9180 | Admin API |
-| Keycloak | 8081 | Identity Management |
+```bash
+bash scripts/setup-apisix-routes.sh
+```
+
+**Windows PowerShell:**
+
+```powershell
+.\scripts\setup-apisix-routes.ps1
+```
+
+This calls the APISIX Admin API at `http://127.0.0.1:9180` to create routes for:
+
+- Central Platform → `/api/central/v1/*`
+- IAM Service → `/api/iam/v1/*`
+- CRM Service → `/api/crm/v1/*`
+- BPM Service → `/api/bpm/v1/*`
+
+---
+
+## Kafka
+
+Kafka runs in **KRaft mode** (no ZooKeeper required):
+
+- **Internal listener**: `arda-kafka:9092` (for Docker services)
+- **External listener**: `localhost:29092` (for host machine / Spring Boot apps)
+- **Kafka UI**: http://localhost:8082 — manage topics, messages, consumers
+
+---
+
+## Default Credentials
+
+| Service    | Username   | Password   |
+| ---------- | ---------- | ---------- |
+| PostgreSQL | `postgres` | `password` |
+
+| Keycloak   | `admin`    | `admin`    |
+
+> ⚠️ These are development defaults only. Change them in production.
