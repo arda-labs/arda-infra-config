@@ -9,6 +9,16 @@
 
 $ErrorActionPreference = "Stop"
 
+# ── Load .env into session ───────────────────────────────────
+$EnvFile = Join-Path (Join-Path $PSScriptRoot "..") "docker-compose\.env"
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$' -and $_ -notmatch '^\s*#') {
+            [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║         ARDA PLATFORM — FULL BOOTSTRAP                    ║" -ForegroundColor Cyan
@@ -41,6 +51,7 @@ Write-Host "  ✓ Redis 8 (healthy)" -ForegroundColor Green
 # Check other critical services
 $keycloakRunning = docker ps --filter "name=arda-keycloak" --filter "status=running" -q
 $kafkaRunning = docker ps --filter "name=arda-kafka" --filter "status=running" -q
+$etcdRunning = docker ps --filter "name=arda-etcd" --filter "status=running" -q
 if (-not $keycloakRunning) {
     Write-Host "  ✗ arda-keycloak is not running" -ForegroundColor Red
     exit 1
@@ -48,6 +59,9 @@ if (-not $keycloakRunning) {
 Write-Host "  ✓ Keycloak 26 (running)" -ForegroundColor Green
 if ($kafkaRunning) {
     Write-Host "  ✓ Kafka (running)" -ForegroundColor Green
+}
+if ($etcdRunning) {
+    Write-Host "  ✓ etcd (running)" -ForegroundColor Green
 }
 
 # ============================================================
@@ -71,17 +85,16 @@ Write-Host "[2/6] Running DB schema migrations..." -ForegroundColor Yellow
 # ============================================================
 Write-Host ""
 Write-Host "[3/6] JWT Keypair..." -ForegroundColor Yellow
-$KeyDir = Join-Path (Join-Path $ScriptsDir "..") "keys"
-$PrivateKeyPath = Join-Path $KeyDir "internal-jwt-private.pem"
-if (Test-Path $PrivateKeyPath) {
+
+if (Test-Path "$ScriptsDir\..\keys\internal-jwt-private.pem") {
     Write-Host "  ✓ Keys already exist, skipping generation" -ForegroundColor Green
 } else {
     Write-Host "  Generating RSA 2048-bit keypair..." -ForegroundColor Gray
-    & "$ScriptsDir\generate-jwt-keypair.ps1"
+    & "$ScriptsDir\generate-jwt-keys.ps1" -Auto
 }
 
 # ============================================================
-# Step 3: Wait for Keycloak to be ready
+# Step 3b: Wait for Keycloak to be ready
 # ============================================================
 Write-Host ""
 Write-Host "[4/6] Waiting for Keycloak to be ready..." -ForegroundColor Yellow
@@ -105,6 +118,7 @@ while ($attempt -lt $maxAttempts) {
 
 # ============================================================
 # Step 4: Configure Keycloak
+# (Step label in output: [5/6])
 # ============================================================
 Write-Host ""
 Write-Host "[5/6] Configuring Keycloak..." -ForegroundColor Yellow
@@ -112,6 +126,7 @@ Write-Host "[5/6] Configuring Keycloak..." -ForegroundColor Yellow
 
 # ============================================================
 # Step 5: Configure APISIX routes
+# (Step label in output: [6/6])
 # ============================================================
 Write-Host ""
 Write-Host "[6/6] Configuring APISIX routes..." -ForegroundColor Yellow
@@ -131,6 +146,7 @@ Write-Host "║    Redis 8 ......... localhost:6379  (healthy)             ║" 
 Write-Host "║    Keycloak 26 ..... localhost:8081  (ready)               ║" -ForegroundColor Green
 Write-Host "║    Kafka ........... localhost:9092  (KRaft)               ║" -ForegroundColor Green
 Write-Host "║    APISIX .......... localhost:9080  (gateway)             ║" -ForegroundColor Green
+Write-Host "║    etcd ............ localhost:2379  (config store)        ║" -ForegroundColor Green
 Write-Host "║                                                            ║" -ForegroundColor Green
 Write-Host "║  Credentials:                                              ║" -ForegroundColor Green
 Write-Host "║    Keycloak Admin .. admin / admin                         ║" -ForegroundColor Green

@@ -38,12 +38,20 @@ if (@($existing).Count -eq 0) {
         enabled                 = $true
         clientAuthenticatorType = "client-secret"
         serviceAccountsEnabled  = $true
+        publicClient             = $false  # Confidential client for service account auth
         protocol                = "openid-connect"
     } | ConvertTo-Json
     Invoke-RestMethod -Method Post -Uri "$KEYCLOAK_URL/admin/realms/$ADMIN_REALM/clients" -Headers $authHeader -ContentType "application/json" -Body $clientBody | Out-Null
     Write-Host "    ✓ Created" -ForegroundColor Green
 } else {
-    Write-Host "    ✓ Already exists" -ForegroundColor Green
+    Write-Host "    ✓ Already exists - ensuring configuration..." -ForegroundColor Gray
+    # Update to ensure it's a confidential client
+    $CLIENT_UUID = $existing[0].id
+    $updateBody = @{
+        publicClient = $false
+    } | ConvertTo-Json
+    Invoke-RestMethod -Method Put -Uri "$KEYCLOAK_URL/admin/realms/$ADMIN_REALM/clients/$CLIENT_UUID" -Headers $authHeader -ContentType "application/json" -Body $updateBody | Out-Null
+    Write-Host "    ✓ Updated to confidential client" -ForegroundColor Green
 }
 
 # --- Step 2b: Setup Gateway Client (arda-gateway) ---
@@ -110,9 +118,22 @@ $realmRoleBody = ConvertTo-Json -Compress -InputObject @( @{ id = $adminRole.id;
 Invoke-RestMethod -Method Post -Uri "$KEYCLOAK_URL/admin/realms/$ADMIN_REALM/users/$SA_ID/role-mappings/realm" -Headers $authHeader -ContentType "application/json" -Body $realmRoleBody | Out-Null
 Write-Host "    ✓ Realm 'admin' role assigned to service account" -ForegroundColor Green
 
-# Get Secret
-$secretObj = Invoke-RestMethod -Method Get -Uri "$KEYCLOAK_URL/admin/realms/$ADMIN_REALM/clients/$CLIENT_UUID/client-secret" -Headers $authHeader
-$SECRET = $secretObj.value
+# Get Secret — try reading first, only regenerate if client was just created
+try {
+    $secretObj = Invoke-RestMethod -Method Get -Uri "$KEYCLOAK_URL/admin/realms/$ADMIN_REALM/clients/$CLIENT_UUID/client-secret" -Headers $authHeader
+    $SECRET = $secretObj.value
+    if (-not $SECRET) {
+        # Newly created confidential clients may need a secret generated
+        $newSecretObj = Invoke-RestMethod -Method Post -Uri "$KEYCLOAK_URL/admin/realms/$ADMIN_REALM/clients/$CLIENT_UUID/client-secret" -Headers $authHeader -ContentType "application/json"
+        $SECRET = $newSecretObj.value
+        Write-Host "    ✓ Secret generated (new client)" -ForegroundColor Gray
+    } else {
+        Write-Host "    ✓ Secret retrieved (existing client)" -ForegroundColor Gray
+    }
+} catch {
+    Write-Host "    ⚠ Could not get secret: $($_.Exception.Message)" -ForegroundColor Yellow
+    $SECRET = "ERROR_CHECK_MANUAL"
+}
 
 # --- Step 5: Create PLATFORM_ADMIN realm role ---
 Write-Host "[5] Creating realm role: PLATFORM_ADMIN" -ForegroundColor Yellow
@@ -164,7 +185,22 @@ Write-Host "    ✓ Role assigned" -ForegroundColor Green
 
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  CLIENT SECRET: $SECRET" -ForegroundColor Cyan
-Write-Host "  Update arda-notification environment variables with this." -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
+
+# Auto-update .env with the notification service secret
+$EnvFile = Join-Path (Join-Path $PSScriptRoot "..") "docker-compose\.env"
+if ($SECRET -ne "ERROR_CHECK_MANUAL" -and (Test-Path $EnvFile)) {
+    $envContent = Get-Content $EnvFile -Raw
+    $updated = $envContent -replace "NOTIFICATION_KC_CLIENT_SECRET=.*", "NOTIFICATION_KC_CLIENT_SECRET=$SECRET"
+    if ($updated -ne $envContent) {
+        Set-Content $EnvFile $updated -NoNewline
+        Write-Host "  ✓ .env updated with NOTIFICATION_KC_CLIENT_SECRET" -ForegroundColor Green
+    }
+} else {
+    Write-Host "  ⚠ Could not auto-update .env. Please set manually:" -ForegroundColor Yellow
+    Write-Host "    NOTIFICATION_KC_CLIENT_SECRET=$SECRET" -ForegroundColor Gray
+}
+
+Write-Host ""
 Write-Host "  super_admin / 123456  →  role: PLATFORM_ADMIN (master)" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
