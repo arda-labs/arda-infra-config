@@ -6,16 +6,16 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=arda_central # Default DB
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=${POSTGRES_DB:-arda_central}
     volumes:
       - arda-postgres-data:/var/lib/postgresql/data
       - ../scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     networks:
       - arda-network
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d arda_central" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-arda_central}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,24 +25,6 @@ services:
         limits:
           memory: 512m
           cpus: "1.0"
-
-  # --- Infrastructure: Configuration (etcd) ---
-  arda-etcd:
-    image: bitnamilegacy/etcd:3.5.11
-    container_name: arda-etcd
-    environment:
-      - ETCD_ENABLE_V2=true
-      - ALLOW_NONE_AUTHENTICATION=yes
-      - ETCD_ADVERTISE_CLIENT_URLS=http://arda-etcd:2379
-    volumes:
-      - arda-etcd-data:/etcd-data
-    networks:
-      - arda-network
-    deploy:
-      resources:
-        limits:
-          memory: 128m
-          cpus: "0.5"
 
   # --- Infrastructure: API Gateway (APISIX) ---
   arda-apisix:
@@ -57,7 +39,8 @@ services:
       - ../apisix/plugins:/usr/local/apisix/conf/plugins
       - ../keys:/usr/local/apisix/conf/keys:ro
     depends_on:
-      - arda-etcd
+      arda-etcd:
+        condition: service_healthy
     networks:
       - arda-network
     deploy:
@@ -65,6 +48,32 @@ services:
         limits:
           memory: 256m
           cpus: "0.5"
+
+  # --- Infrastructure: Config Store (etcd) for APISIX ---
+  arda-etcd:
+    image: bitnami/etcd:3.5
+    container_name: arda-etcd
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+    ports:
+      - "2379:2379"
+    volumes:
+      - arda-etcd-data:/bitnami/etcd
+    networks:
+      - arda-network
+    healthcheck:
+      test: [ "CMD", "etcdctl", "endpoint", "health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
 
   # --- Infrastructure: Identity (Keycloak 26) ---
   arda-keycloak:
@@ -75,10 +84,10 @@ services:
     environment:
       - KC_DB=postgres
       - KC_DB_URL=jdbc:postgresql://arda-postgres:5432/arda_iam
-      - KC_DB_USERNAME=postgres
-      - KC_DB_PASSWORD=password
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_DB_USERNAME=${POSTGRES_USER:-postgres}
+      - KC_DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required}
     command: start-dev
     depends_on:
       arda-postgres:
@@ -115,6 +124,12 @@ services:
       - arda-kafka-data:/bitnami/kafka
     networks:
       - arda-network
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -177,10 +192,10 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=arda-kafka:9092
       - KEYCLOAK_SERVER_URL=http://arda-keycloak:8080
       - KEYCLOAK_CLIENT_ID=arda-migration-worker
-      - KEYCLOAK_CLIENT_SECRET=changeme
+      - KEYCLOAK_CLIENT_SECRET=${MIGRATION_WORKER_KC_CLIENT_SECRET:-changeme}
       - POSTGRES_ADMIN_JDBC_URL=jdbc:postgresql://arda-postgres:5432/postgres
-      - POSTGRES_ADMIN_USER=postgres
-      - POSTGRES_ADMIN_PASSWORD=password
+      - POSTGRES_ADMIN_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_ADMIN_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       - POSTGRES_HOST=arda-postgres
       - POSTGRES_PORT=5432
     depends_on:
@@ -210,14 +225,14 @@ services:
       - DB_HOST=arda-postgres
       - DB_PORT=5432
       - DB_NAME=arda_notification
-      - DB_USER=postgres
-      - DB_PASSWORD=password
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       - KAFKA_BROKERS=arda-kafka:9092
       - KEYCLOAK_URL=http://arda-keycloak:8080
       - KEYCLOAK_ADMIN_REALM=master
       - KEYCLOAK_ADMIN_CLIENT_ID=arda-notification-service
       # Secret generated via: scripts/setup-keycloak.ps1
-      - KEYCLOAK_ADMIN_CLIENT_SECRET=pkAYZzpp95RALAYwW5wSJWtIqkcAAAdA
+      - KEYCLOAK_ADMIN_CLIENT_SECRET=${NOTIFICATION_KC_CLIENT_SECRET:?NOTIFICATION_KC_CLIENT_SECRET is required}
       - ARDA_NOTIF_SERVER_ENV=production
       - ARDA_NOTIF_TTL_RETENTION_DAYS=30
       # V2 Gateway AuthN: path to Internal JWT public key (mounted below)
@@ -245,8 +260,8 @@ networks:
 
 volumes:
   arda-postgres-data:
-  arda-etcd-data:
   arda-kafka-data:
   arda-redis-data:
+  arda-etcd-data:
 
 
